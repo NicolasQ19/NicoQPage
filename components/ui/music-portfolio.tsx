@@ -160,11 +160,13 @@ interface PlayerBarProps {
   audio: HTMLAudioElement | null;
   isPlaying: boolean;
   onPlayPause: () => void;
+  onNext: () => void;
+  onPrev: () => void;
   eqGains: { bass: number; mid: number; treble: number };
   onEqChange: (band: 'bass' | 'mid' | 'treble', value: number) => void;
 }
 
-const PlayerBar = ({ project, audio, isPlaying, onPlayPause, eqGains, onEqChange }: PlayerBarProps) => {
+const PlayerBar = ({ project, audio, isPlaying, onPlayPause, onNext, onPrev, eqGains, onEqChange }: PlayerBarProps) => {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
@@ -253,8 +255,14 @@ const PlayerBar = ({ project, audio, isPlaying, onPlayPause, eqGains, onEqChange
 
       {/* Row 2: controls + progress + volume */}
       <div className="player-controls-row">
+        <button className="player-btn" onClick={onPrev} disabled={!project} aria-label="Previous track">
+          &#9664;&#9664;
+        </button>
         <button className="player-btn" onClick={onPlayPause} disabled={!project}>
-          {isPlaying ? '■ stop' : '▶ play'}
+          {isPlaying ? '■' : '▶'}
+        </button>
+        <button className="player-btn" onClick={onNext} disabled={!project} aria-label="Next track">
+          &#9654;&#9654;
         </button>
         <div className="player-progress">
           <input
@@ -339,6 +347,10 @@ const MusicPortfolio = ({
   const idleAnimRef    = useRef<gsap.core.Timeline | null>(null);
   const debounceRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Refs that mirror state — used inside MediaSession handlers to avoid stale closures
+  const playingIndexRef = useRef(-1);
+  const tracksRef       = useRef<Project[]>(PROJECTS_DATA);
+
   // EQ
   const audioCtxRef    = useRef<AudioContext | null>(null);
   const bassRef        = useRef<BiquadFilterNode | null>(null);
@@ -380,6 +392,10 @@ const MusicPortfolio = ({
     const map = { bass: bassRef, mid: midRef, treble: trebleRef };
     if (map[band].current) map[band].current!.gain.value = value;
   }, []);
+
+  // Keep refs in sync with state
+  useEffect(() => { playingIndexRef.current = playingIndex; }, [playingIndex]);
+  useEffect(() => { tracksRef.current = tracks; }, [tracks]);
 
   // Restore saved order from localStorage
   useEffect(() => {
@@ -518,46 +534,11 @@ const MusicPortfolio = ({
     });
   }, []);
 
-  const bindMediaSessionActions = useCallback(() => {
-    if (!('mediaSession' in navigator)) return;
-    navigator.mediaSession.setActionHandler('play', () => {
-      audioRef.current?.play();
-      setIsAudioPlaying(true);
-    });
-    navigator.mediaSession.setActionHandler('pause', () => {
-      audioRef.current?.pause();
-      setIsAudioPlaying(false);
-    });
-    navigator.mediaSession.setActionHandler('previoustrack', () => {
-      if (playingIndex <= 0) return;
-      const prev = playingIndex - 1;
-      if (tracks[prev]?.audioUrl) handleTrackClickInner(prev);
-    });
-    navigator.mediaSession.setActionHandler('nexttrack', () => {
-      const next = playingIndex + 1;
-      if (next < tracks.length && tracks[next]?.audioUrl) handleTrackClickInner(next);
-    });
-    navigator.mediaSession.setActionHandler('seekto', (details) => {
-      if (details.seekTime != null && audioRef.current) {
-        audioRef.current.currentTime = details.seekTime;
-      }
-    });
-    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-      if (audioRef.current) {
-        audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - (details.seekOffset ?? 10));
-      }
-    });
-    navigator.mediaSession.setActionHandler('seekforward', (details) => {
-      if (audioRef.current) {
-        audioRef.current.currentTime = Math.min(audioRef.current.duration, audioRef.current.currentTime + (details.seekOffset ?? 10));
-      }
-    });
-  }, [playingIndex, tracks]);
-
-  // ── Audio playback
+  // ── Audio playback (defined before bindMediaSessionActions so it can reference it)
   const handleTrackClickInner = useCallback((index: number) => {
-    const project = tracks[index];
-    if (!project.audioUrl) return;
+    const list = tracksRef.current;
+    const project = list[index];
+    if (!project?.audioUrl) return;
 
     audioRef.current?.pause();
     initEQ();
@@ -575,16 +556,98 @@ const MusicPortfolio = ({
 
     audio.play();
     setPlayingIndex(index);
+    playingIndexRef.current = index;
     setIsAudioPlaying(true);
     updateMediaSession(project);
-    audio.addEventListener('ended', () => { setPlayingIndex(-1); setIsAudioPlaying(false); });
-  }, [tracks, updateMediaSession, initEQ]);
+    audio.addEventListener('ended', () => {
+      setPlayingIndex(-1);
+      playingIndexRef.current = -1;
+      setIsAudioPlaying(false);
+    });
+  }, [updateMediaSession, initEQ]);
+
+  // ── Circular next / prev helpers (always use refs for fresh values)
+  const findNext = useCallback((from: number) => {
+    const list = tracksRef.current;
+    for (let i = 1; i <= list.length; i++) {
+      const idx = (from + i) % list.length;
+      if (list[idx]?.audioUrl) return idx;
+    }
+    return -1;
+  }, []);
+
+  const findPrev = useCallback((from: number) => {
+    const list = tracksRef.current;
+    for (let i = 1; i <= list.length; i++) {
+      const idx = (from - i + list.length) % list.length;
+      if (list[idx]?.audioUrl) return idx;
+    }
+    return -1;
+  }, []);
+
+  const handleNext = useCallback(() => {
+    const idx = findNext(playingIndexRef.current);
+    if (idx !== -1) handleTrackClickInner(idx);
+  }, [findNext, handleTrackClickInner]);
+
+  const handlePrev = useCallback(() => {
+    const idx = findPrev(playingIndexRef.current);
+    if (idx !== -1) handleTrackClickInner(idx);
+  }, [findPrev, handleTrackClickInner]);
+
+  // ── Bind MediaSession actions once on mount (uses refs → always fresh)
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.setActionHandler('play', () => {
+      audioRef.current?.play();
+      setIsAudioPlaying(true);
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      audioRef.current?.pause();
+      setIsAudioPlaying(false);
+    });
+    navigator.mediaSession.setActionHandler('previoustrack', () => {
+      const idx = findPrev(playingIndexRef.current);
+      if (idx !== -1) handleTrackClickInner(idx);
+    });
+    navigator.mediaSession.setActionHandler('nexttrack', () => {
+      const idx = findNext(playingIndexRef.current);
+      if (idx !== -1) handleTrackClickInner(idx);
+    });
+    navigator.mediaSession.setActionHandler('seekto', (details) => {
+      if (details.seekTime != null && audioRef.current) {
+        audioRef.current.currentTime = details.seekTime;
+      }
+    });
+    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+      if (audioRef.current) {
+        audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - (details.seekOffset ?? 10));
+      }
+    });
+    navigator.mediaSession.setActionHandler('seekforward', (details) => {
+      if (audioRef.current) {
+        audioRef.current.currentTime = Math.min(audioRef.current.duration, audioRef.current.currentTime + (details.seekOffset ?? 10));
+      }
+    });
+  }, [findNext, findPrev, handleTrackClickInner]);
+
+  // ── Resume AudioContext when page becomes visible again (fix background audio)
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && audioCtxRef.current?.state === 'suspended') {
+        audioCtxRef.current.resume();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
 
   const handleTrackClick = useCallback((index: number) => {
-    const project = tracks[index];
-    if (!project.audioUrl) return;
+    const list = tracksRef.current;
+    const project = list[index];
+    if (!project?.audioUrl) return;
 
-    if (playingIndex === index) {
+    if (playingIndexRef.current === index) {
       if (audioRef.current?.paused) {
         audioRef.current.play(); setIsAudioPlaying(true);
       } else {
@@ -594,8 +657,7 @@ const MusicPortfolio = ({
     }
 
     handleTrackClickInner(index);
-    bindMediaSessionActions();
-  }, [playingIndex, tracks, handleTrackClickInner, bindMediaSessionActions]);
+  }, [handleTrackClickInner]);
 
   const handlePlayerPlayPause = useCallback(() => {
     if (!audioRef.current) return;
@@ -686,6 +748,8 @@ const MusicPortfolio = ({
         audio={currentAudio}
         isPlaying={isAudioPlaying}
         onPlayPause={handlePlayerPlayPause}
+        onNext={handleNext}
+        onPrev={handlePrev}
         eqGains={eqGains}
         onEqChange={handleEqChange}
       />
