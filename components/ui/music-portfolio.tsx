@@ -361,6 +361,20 @@ const MusicPortfolio = ({
   const initEQ = useCallback(() => {
     if (audioCtxRef.current) return;
     const ctx = new AudioContext();
+
+    // Keep AudioContext alive in background with a looping silent buffer
+    const silentBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const silentSrc = ctx.createBufferSource();
+    silentSrc.buffer = silentBuf;
+    silentSrc.loop = true;
+    silentSrc.connect(ctx.destination);
+    silentSrc.start();
+
+    // Auto-resume if the OS suspends the context
+    ctx.onstatechange = () => {
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    };
+
     const bass = ctx.createBiquadFilter();
     bass.type = 'lowshelf';
     bass.frequency.value = 250;
