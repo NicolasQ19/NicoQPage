@@ -162,11 +162,9 @@ interface PlayerBarProps {
   onPlayPause: () => void;
   onNext: () => void;
   onPrev: () => void;
-  eqGains: { bass: number; mid: number; treble: number };
-  onEqChange: (band: 'bass' | 'mid' | 'treble', value: number) => void;
 }
 
-const PlayerBar = ({ project, audio, isPlaying, onPlayPause, onNext, onPrev, eqGains, onEqChange }: PlayerBarProps) => {
+const PlayerBar = ({ project, audio, isPlaying, onPlayPause, onNext, onPrev }: PlayerBarProps) => {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
@@ -232,17 +230,6 @@ const PlayerBar = ({ project, audio, isPlaying, onPlayPause, onNext, onPrev, eqG
   const trackName = project?.songName ?? '—';
   const artist    = project?.artist ?? '';
 
-  const eqSliderStyle = (val: number) => {
-    const pct = ((val + 12) / 24) * 100;
-    return {
-      background: `linear-gradient(to right,
-        rgba(240,236,227,0.75) 0%,
-        rgba(240,236,227,0.75) ${pct}%,
-        rgba(240,236,227,0.12) ${pct}%,
-        rgba(240,236,227,0.12) 100%)`,
-    };
-  };
-
   return (
     <div className="player-bar">
       {/* Row 1: info + time */}
@@ -291,26 +278,6 @@ const PlayerBar = ({ project, audio, isPlaying, onPlayPause, onNext, onPrev, eqG
           />
         </div>
       </div>
-
-      {/* Row 3: EQ */}
-      <div className="player-eq-row">
-        {(['bass', 'mid', 'treble'] as const).map((band) => (
-          <div key={band} className="player-eq-band">
-            <span className="player-eq-label">{band}</span>
-            <input
-              type="range"
-              className="player-slider player-eq-slider"
-              min={-12}
-              max={12}
-              step={0.5}
-              value={eqGains[band]}
-              style={eqSliderStyle(eqGains[band])}
-              onChange={(e) => onEqChange(band, parseFloat(e.target.value))}
-            />
-            <span className="player-eq-val">{eqGains[band] > 0 ? '+' : ''}{eqGains[band]}</span>
-          </div>
-        ))}
-      </div>
     </div>
   );
 };
@@ -350,62 +317,6 @@ const MusicPortfolio = ({
   // Refs that mirror state — used inside MediaSession handlers to avoid stale closures
   const playingIndexRef = useRef(-1);
   const tracksRef       = useRef<Project[]>(PROJECTS_DATA);
-
-  // EQ
-  const audioCtxRef    = useRef<AudioContext | null>(null);
-  const bassRef        = useRef<BiquadFilterNode | null>(null);
-  const midRef         = useRef<BiquadFilterNode | null>(null);
-  const trebleRef      = useRef<BiquadFilterNode | null>(null);
-  const [eqGains, setEqGains] = useState({ bass: 0, mid: 0, treble: 0 });
-
-  const initEQ = useCallback(() => {
-    if (audioCtxRef.current) return;
-    const ctx = new AudioContext();
-
-    // Keep AudioContext alive in background with a looping silent buffer
-    const silentBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
-    const silentSrc = ctx.createBufferSource();
-    silentSrc.buffer = silentBuf;
-    silentSrc.loop = true;
-    silentSrc.connect(ctx.destination);
-    silentSrc.start();
-
-    // Auto-resume if the OS suspends the context
-    ctx.onstatechange = () => {
-      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-    };
-
-    const bass = ctx.createBiquadFilter();
-    bass.type = 'lowshelf';
-    bass.frequency.value = 250;
-    bass.gain.value = 0;
-
-    const mid = ctx.createBiquadFilter();
-    mid.type = 'peaking';
-    mid.frequency.value = 1000;
-    mid.Q.value = 1;
-    mid.gain.value = 0;
-
-    const treble = ctx.createBiquadFilter();
-    treble.type = 'highshelf';
-    treble.frequency.value = 4000;
-    treble.gain.value = 0;
-
-    bass.connect(mid);
-    mid.connect(treble);
-    treble.connect(ctx.destination);
-
-    audioCtxRef.current = ctx;
-    bassRef.current = bass;
-    midRef.current = mid;
-    trebleRef.current = treble;
-  }, []);
-
-  const handleEqChange = useCallback((band: 'bass' | 'mid' | 'treble', value: number) => {
-    setEqGains(prev => ({ ...prev, [band]: value }));
-    const map = { bass: bassRef, mid: midRef, treble: trebleRef };
-    if (map[band].current) map[band].current!.gain.value = value;
-  }, []);
 
   // Keep refs in sync with state
   useEffect(() => { playingIndexRef.current = playingIndex; }, [playingIndex]);
@@ -548,25 +459,17 @@ const MusicPortfolio = ({
     });
   }, []);
 
-  // ── Audio playback (defined before bindMediaSessionActions so it can reference it)
+  // ── Audio playback
   const handleTrackClickInner = useCallback((index: number) => {
     const list = tracksRef.current;
     const project = list[index];
     if (!project?.audioUrl) return;
 
     audioRef.current?.pause();
-    initEQ();
 
     const audio = new Audio(project.audioUrl);
     audioRef.current = audio;
     setCurrentAudio(audio);
-
-    // Connect through EQ chain
-    if (audioCtxRef.current && bassRef.current) {
-      audioCtxRef.current.resume();
-      const source = audioCtxRef.current.createMediaElementSource(audio);
-      source.connect(bassRef.current);
-    }
 
     audio.play();
     setPlayingIndex(index);
@@ -578,7 +481,7 @@ const MusicPortfolio = ({
       playingIndexRef.current = -1;
       setIsAudioPlaying(false);
     });
-  }, [updateMediaSession, initEQ]);
+  }, [updateMediaSession]);
 
   // ── Circular next / prev helpers (always use refs for fresh values)
   const findNext = useCallback((from: number) => {
@@ -644,17 +547,6 @@ const MusicPortfolio = ({
       }
     });
   }, [findNext, findPrev, handleTrackClickInner]);
-
-  // ── Resume AudioContext when page becomes visible again (fix background audio)
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible' && audioCtxRef.current?.state === 'suspended') {
-        audioCtxRef.current.resume();
-      }
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, []);
 
   const handleTrackClick = useCallback((index: number) => {
     const list = tracksRef.current;
@@ -764,8 +656,6 @@ const MusicPortfolio = ({
         onPlayPause={handlePlayerPlayPause}
         onNext={handleNext}
         onPrev={handlePrev}
-        eqGains={eqGains}
-        onEqChange={handleEqChange}
       />
     </div>
   );
