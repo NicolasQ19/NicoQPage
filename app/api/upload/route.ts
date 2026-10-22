@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   await writeFile(destPath, Buffer.from(bytes));
 
   // Update tracks.json
-  const tracksPath = path.join(process.cwd(), 'tracks.json');
+  const tracksPath = path.join(process.cwd(), 'data', 'tracks.json');
   const tracks = JSON.parse(await readFile(tracksPath, 'utf-8'));
   const maxId = tracks.reduce((max: number, t: { id: number }) => Math.max(max, t.id), 0);
 

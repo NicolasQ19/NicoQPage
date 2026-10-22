@@ -40,7 +40,7 @@ fs.copyFileSync(filePath, destPath);
 console.log(`  Copiado -> public/audio/${destName}`);
 
 // Update tracks.json
-const tracksPath = path.join(__dirname, '..', 'tracks.json');
+const tracksPath = path.join(__dirname, '..', 'data', 'tracks.json');
 const tracks = JSON.parse(fs.readFileSync(tracksPath, 'utf-8'));
 
 const maxId = tracks.reduce((max, t) => Math.max(max, t.id), 0);

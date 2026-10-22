@@ -1,36 +1,55 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NicoQ
 
-## Getting Started
+Portfolio musical con reproductor y panel de administración.
 
-First, run the development server:
+## Estructura
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```text
+app/                      Rutas y layouts de Next.js
+  admin/                  Panel de administración y sus estilos
+  api/                    Endpoints de temas, carga y orden
+  globals.css             Tema, fuentes y estilos base
+components/
+  music/                  Portfolio musical y estilos del sitio
+    music-portfolio.tsx   Composición, reproducción y orden de temas
+    player-bar.tsx        Barra y controles del reproductor
+    track-row.tsx         Fila de un tema
+    time-display.tsx      Reloj del encabezado
+    music.css             Estilos y adaptación a pantallas
+  ui/                     Componentes genéricos de interfaz
+data/                    Catálogo de temas (tracks.json)
+lib/                      Utilidades compartidas
+public/                   Archivos públicos e imágenes
+  audio/                  Archivos de audio
+scripts/                  Herramientas de mantenimiento local
+types/                    Tipos compartidos
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Desarrollo
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+El sitio se abre en `http://localhost:3000` y el panel en `/admin`.
 
-## Learn More
+## Agregar música localmente
 
-To learn more about Next.js, take a look at the following resources:
+Usá `/admin` con el servidor local o ejecutá:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm run add -- "Nombre del tema" "ruta/al/audio.mp3" --year 2026
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+El audio se guarda en `public/audio/` y el catálogo en `data/tracks.json`.
+Para publicar los cambios, incluí ambos en el siguiente despliegue.
+El panel escribe en el disco del servidor; las cargas y ediciones necesitan almacenamiento externo para funcionar en Vercel.
 
-## Deploy on Vercel
+## Comprobaciones
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run lint
+npx tsc --noEmit
+npm run build
+```

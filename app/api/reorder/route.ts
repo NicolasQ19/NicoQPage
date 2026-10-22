@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Se necesita un array de IDs' }, { status: 400 });
   }
 
-  const tracksPath = path.join(process.cwd(), 'tracks.json');
+  const tracksPath = path.join(process.cwd(), 'data', 'tracks.json');
   const tracks = JSON.parse(await readFile(tracksPath, 'utf-8'));
 
   const byId = new Map(tracks.map((t: { id: number }) => [t.id, t]));

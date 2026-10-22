@@ -1,375 +1,131 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
+import { ArrowDown, ArrowUp, ArrowUpRight, Check, Disc3, GripVertical, Loader2, Music2, Pencil, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react';
+import styles from './admin.module.css';
 
-interface Track {
-  id: number;
-  artist: string;
-  songName: string;
-  year: string;
-  audioUrl?: string;
-  image?: string;
-}
+import type { Track } from '@/types/track';
+
 
 export default function AdminPage() {
-  // ── Upload state
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [file, setFile] = useState<File | null>(null);
   const [songName, setSongName] = useState('');
   const [year, setYear] = useState(new Date().getFullYear().toString());
   const [image, setImage] = useState('');
-  const [status, setStatus] = useState<'idle' | 'uploading' | 'done' | 'error'>('idle');
-  const [message, setMessage] = useState('');
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  // ── Track list state
-  const [tracks, setTracks] = useState<Track[]>([]);
-  const [dragIdx, setDragIdx] = useState<number | null>(null);
-  const [overIdx, setOverIdx] = useState<number | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [overId, setOverId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState<Partial<Track>>({});
+  const [edit, setEdit] = useState<Partial<Track>>({});
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const loadTracks = useCallback(async () => {
     const res = await fetch('/api/tracks');
-    if (res.ok) setTracks(await res.json());
+    if (!res.ok) throw new Error('No se pudieron cargar los temas.');
+    setTracks(await res.json());
+    setDirty(false);
   }, []);
 
-  useEffect(() => { loadTracks(); }, [loadTracks]);
+  useEffect(() => {
+    loadTracks().catch(() => setNotice({ text: 'No se pudo cargar la biblioteca. Recargá la página para reintentar.', error: true })).finally(() => setLoading(false));
+  }, [loadTracks]);
 
-  // ── Upload
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function run(action: string, request: () => Promise<void>) {
+    setBusy(action);
+    setNotice(null);
+    try { await request(); } catch (error) {
+      setNotice({ text: error instanceof Error ? error.message : 'No se pudo completar la acción. Intentá de nuevo.', error: true });
+    } finally { setBusy(null); }
+  }
+
+  function selectFile(selected: File | undefined) {
+    if (!selected) return;
+    if (!selected.type.startsWith('audio/') && !/\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(selected.name)) {
+      setNotice({ text: 'Elegí un archivo de audio válido.', error: true }); return;
+    }
+    setFile(selected);
+    setSongName(selected.name.replace(/\.[^.]+$/, ''));
+  }
+
+  async function upload(e: React.FormEvent) {
     e.preventDefault();
-    const file = fileRef.current?.files?.[0];
-    if (!file) {
-      setMessage('Selecciona un archivo.');
-      setStatus('error');
-      return;
-    }
-    const name = file.name.replace(/\.[^.]+$/, '');
-    setSongName(name);
-
-    setStatus('uploading');
-    setMessage('Subiendo...');
-
-    const form = new FormData();
-    form.append('file', file);
-    form.append('songName', name);
-    form.append('year', year);
-    if (image.trim()) form.append('image', image.trim());
-
-    try {
+    if (!file || !songName.trim()) return;
+    await run('upload', async () => {
+      const form = new FormData();
+      form.append('file', file); form.append('songName', songName.trim()); form.append('year', year); form.append('image', image.trim());
       const res = await fetch('/api/upload', { method: 'POST', body: form });
-      if (!res.ok) throw new Error('Upload failed');
-      const data = await res.json();
-      setStatus('done');
-      setMessage(`"${data.track.songName}" agregado.`);
-      setSongName('');
-      setImage('');
+      if (!res.ok) throw new Error('No se pudo subir el tema. Verificá que el servidor permita guardar archivos.');
+      await loadTracks();
+      setFile(null); setSongName(''); setImage('');
       if (fileRef.current) fileRef.current.value = '';
-      loadTracks();
-    } catch {
-      setStatus('error');
-      setMessage('Error al subir. Revisa la consola.');
-    }
-  };
+      setNotice({ text: 'Tema agregado a tu biblioteca.' });
+    });
+  }
 
-  // ── Drag & drop
-  const handleDragStart = (idx: number) => setDragIdx(idx);
-  const handleDragOver = (e: React.DragEvent, idx: number) => { e.preventDefault(); setOverIdx(idx); };
-  const handleDrop = (idx: number) => {
-    if (dragIdx === null || dragIdx === idx) { setDragIdx(null); setOverIdx(null); return; }
-    const updated = [...tracks];
-    const [moved] = updated.splice(dragIdx, 1);
-    updated.splice(idx, 0, moved);
-    setTracks(updated);
-    setDragIdx(null);
-    setOverIdx(null);
-  };
-  const handleDragEnd = () => { setDragIdx(null); setOverIdx(null); };
+  function move(from: number, to: number) {
+    if (from === to || to < 0 || to >= tracks.length) return;
+    const next = [...tracks]; const [track] = next.splice(from, 1); next.splice(to, 0, track);
+    setTracks(next); setDirty(true);
+  }
 
-  // ── Save order
-  const saveOrder = async () => {
-    setSaving(true);
-    try {
-      const res = await fetch('/api/reorder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order: tracks.map(t => t.id) }),
-      });
-      if (res.ok) { setMessage('Orden guardado.'); setStatus('done'); }
-    } catch {
-      setMessage('Error al guardar el orden.');
-      setStatus('error');
-    }
-    setSaving(false);
-  };
+  const visibleTracks = tracks.filter(t => `${t.songName} ${t.artist} ${t.year}`.toLowerCase().includes(query.toLowerCase()));
 
-  // ── Move with buttons
-  const move = (idx: number, dir: -1 | 1) => {
-    const to = idx + dir;
-    if (to < 0 || to >= tracks.length) return;
-    const updated = [...tracks];
-    [updated[idx], updated[to]] = [updated[to], updated[idx]];
-    setTracks(updated);
-  };
-
-  // ── Edit track
-  const startEdit = (track: Track) => {
-    setEditingId(track.id);
-    setEditForm({ songName: track.songName, year: track.year, image: track.image || '', artist: track.artist });
-  };
-
-  const cancelEdit = () => {
-    setEditingId(null);
-    setEditForm({});
-  };
-
-  const saveEdit = async () => {
-    if (editingId === null) return;
-    try {
-      const res = await fetch(`/api/tracks/${editingId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editForm),
-      });
-      if (res.ok) {
-        setMessage('Tema actualizado.');
-        setStatus('done');
-        setEditingId(null);
-        setEditForm({});
-        loadTracks();
-      }
-    } catch {
-      setMessage('Error al guardar.');
-      setStatus('error');
-    }
-  };
-
-  // ── Delete track
-  const deleteTrack = async (track: Track) => {
-    if (!confirm(`Eliminar "${track.songName}"?`)) return;
-    try {
-      const res = await fetch(`/api/tracks/${track.id}`, { method: 'DELETE' });
-      if (res.ok) {
-        setMessage(`"${track.songName}" eliminado.`);
-        setStatus('done');
-        loadTracks();
-      }
-    } catch {
-      setMessage('Error al eliminar.');
-      setStatus('error');
-    }
-  };
-
-  return (
-    <div style={{
-      minHeight: '100vh',
-      background: '#0a0a0a',
-      color: '#f0ece3',
-      fontFamily: 'monospace',
-      padding: '2rem',
-      maxWidth: '640px',
-      margin: '0 auto',
-      overflowY: 'auto',
-    }}>
-      {/* ── Upload form ── */}
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '2.5rem' }}>
-        <h1 style={{ fontSize: '1.2rem', opacity: 0.6 }}>+ agregar tema</h1>
-
-        <label>
-          <span style={labelStyle}>Archivo (mp3/wav)</span>
-          <input ref={fileRef} type="file" accept="audio/*" style={inputStyle} onChange={e => {
-            const file = e.target.files?.[0];
-            if (file) {
-              const name = file.name.replace(/\.[^.]+$/, '');
-              setSongName(name);
-            }
-          }} />
-        </label>
-
-        {songName && (
-          <p style={{ fontSize: '0.85rem', opacity: 0.5, margin: 0 }}>
-            Nombre: <strong style={{ opacity: 1 }}>{songName}</strong>
-          </p>
-        )}
-
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <label style={{ flex: '0 0 100px' }}>
-            <span style={labelStyle}>Año</span>
-            <input type="text" value={year} onChange={e => setYear(e.target.value)} style={inputStyle} />
-          </label>
-          <label style={{ flex: 1 }}>
-            <span style={labelStyle}>Imagen (URL, opcional)</span>
-            <input type="text" value={image} onChange={e => setImage(e.target.value)} placeholder="https://..." style={inputStyle} />
-          </label>
-        </div>
-
-        <button type="submit" disabled={status === 'uploading'} style={btnStyle(status === 'uploading')}>
-          {status === 'uploading' ? 'subiendo...' : 'subir tema'}
-        </button>
-      </form>
-
-      {/* ── Track list ── */}
-      <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-          <h2 style={{ fontSize: '1.2rem', opacity: 0.6, margin: 0 }}>temas</h2>
-          <button onClick={saveOrder} disabled={saving} style={{ ...btnStyle(saving), padding: '0.5rem 1rem', fontSize: '0.8rem' }}>
-            {saving ? 'guardando...' : 'guardar orden'}
-          </button>
-        </div>
-
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-          {tracks.map((track, idx) => (
-            <li
-              key={track.id}
-              draggable={editingId !== track.id}
-              onDragStart={() => handleDragStart(idx)}
-              onDragOver={(e) => handleDragOver(e, idx)}
-              onDrop={() => handleDrop(idx)}
-              onDragEnd={handleDragEnd}
-              style={{
-                padding: '0.6rem 0.75rem',
-                background: dragIdx === idx ? '#1a2a1a' : overIdx === idx ? '#1a1a2a' : '#111',
-                borderBottom: '1px solid #222',
-                cursor: editingId === track.id ? 'default' : 'grab',
-                opacity: dragIdx === idx ? 0.5 : 1,
-                transition: 'background 0.15s',
-              }}
-            >
-              {editingId === track.id ? (
-                /* ── Edit mode ── */
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  <label>
-                    <span style={labelStyle}>Nombre</span>
-                    <input
-                      type="text"
-                      value={editForm.songName || ''}
-                      onChange={e => setEditForm(f => ({ ...f, songName: e.target.value }))}
-                      style={inputStyle}
-                    />
-                  </label>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <label style={{ flex: '0 0 80px' }}>
-                      <span style={labelStyle}>Año</span>
-                      <input
-                        type="text"
-                        value={editForm.year || ''}
-                        onChange={e => setEditForm(f => ({ ...f, year: e.target.value }))}
-                        style={inputStyle}
-                      />
-                    </label>
-                    <label style={{ flex: 1 }}>
-                      <span style={labelStyle}>Imagen URL</span>
-                      <input
-                        type="text"
-                        value={editForm.image || ''}
-                        onChange={e => setEditForm(f => ({ ...f, image: e.target.value }))}
-                        style={inputStyle}
-                      />
-                    </label>
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button onClick={saveEdit} style={{ ...btnStyle(false), padding: '0.4rem 0.8rem', fontSize: '0.8rem', flex: 1 }}>
-                      guardar
-                    </button>
-                    <button onClick={cancelEdit} style={{ ...btnStyle(false), padding: '0.4rem 0.8rem', fontSize: '0.8rem', background: '#333', color: '#f0ece3' }}>
-                      cancelar
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                /* ── Normal mode ── */
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span style={{ opacity: 0.3, fontSize: '0.8rem', width: '24px', textAlign: 'center' }}>
-                    {String(idx + 1).padStart(2, '0')}
-                  </span>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginRight: '0.25rem' }}>
-                    <button onClick={() => move(idx, -1)} disabled={idx === 0} style={arrowBtn}>&#9650;</button>
-                    <button onClick={() => move(idx, 1)} disabled={idx === tracks.length - 1} style={arrowBtn}>&#9660;</button>
-                  </div>
-
-                  <span style={{ flex: 1, fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {track.songName}
-                  </span>
-                  <span style={{ opacity: 0.3, fontSize: '0.75rem', marginRight: '0.25rem' }}>{track.year}</span>
-
-                  <button onClick={() => startEdit(track)} style={actionBtn} title="Editar">
-                    &#9998;
-                  </button>
-                  <button onClick={() => deleteTrack(track)} style={{ ...actionBtn, color: '#a44' }} title="Eliminar">
-                    &#10005;
-                  </button>
-                  <span style={{ opacity: 0.2, fontSize: '0.7rem' }}>&#9776;</span>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
+  return <main className={styles.shell}>
+    <header className={styles.topbar}>
+      <Link href="/" className={styles.brand}>NICO<span>Q</span><span className={styles.brandDivider}>/</span><small>STUDIO</small></Link>
+      <Link href="/" className={styles.siteLink}>Ver sitio <ArrowUpRight size={15} /></Link>
+    </header>
+    <div className={styles.content}>
+      <div className={styles.heading}><div><p className={styles.eyebrow}><span /> TU ESPACIO DE CONTROL</p><h1>La música, a tu manera<span>.</span></h1><p className={styles.subtitle}>Subí nuevos sonidos. Dale forma a tu biblioteca.</p></div><div className={styles.counter}><Disc3 size={24} /><strong>{String(tracks.length).padStart(2, '0')}</strong><span>temas en biblioteca</span></div></div>
+      {notice && <div role={notice.error ? 'alert' : 'status'} className={`${styles.notice} ${notice.error ? styles.error : ''}`}><span>{notice.error ? <X size={17} /> : <Check size={17} />}{notice.text}</span><button aria-label="Cerrar mensaje" onClick={() => setNotice(null)}><X size={16} /></button></div>}
+      <div className={styles.workspace}>
+        <aside className={styles.uploadPanel}>
+          <div className={styles.sectionTitle}><span className={styles.sectionIcon}><Plus size={18} /></span><div><h2>Nuevo tema</h2><p>El próximo en sonar.</p></div></div>
+          <form onSubmit={upload}>
+            <label className={`${styles.dropzone} ${file ? styles.fileSelected : ''}`} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (!busy && !dirty) selectFile(e.dataTransfer.files[0]); }}>
+              <input ref={fileRef} type="file" accept="audio/*" disabled={!!busy || dirty} onChange={e => selectFile(e.target.files?.[0])} aria-label="Seleccionar archivo de audio" />
+              <span className={styles.uploadIcon}>{file ? <Music2 size={25} /> : <Upload size={25} />}</span>
+              <strong>{file ? file.name : 'Arrastrá tu audio acá'}</strong><span>{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB · Cambiar archivo` : 'o hacé clic para elegir un archivo'}</span><small>MP3, WAV y otros formatos de audio</small>
+            </label>
+            <label className={styles.field}>Nombre del tema<input value={songName} onChange={e => setSongName(e.target.value)} placeholder="Dale un nombre a tu sonido" required disabled={!!busy} /></label>
+            <label className={styles.field}>Año<input value={year} onChange={e => setYear(e.target.value)} placeholder="2026" required maxLength={4} inputMode="numeric" disabled={!!busy} /></label>
+            <label className={styles.field}>Imagen de portada <span>opcional</span><input type="url" value={image} onChange={e => setImage(e.target.value)} placeholder="https://..." disabled={!!busy} /></label>
+            <button className={styles.primary} disabled={!file || !songName.trim() || !!busy || dirty}>{busy === 'upload' ? <Loader2 size={17} className={styles.spin} /> : <Plus size={17} />}{busy === 'upload' ? 'Subiendo tema…' : 'Agregar a la biblioteca'}</button>
+            <p className={styles.formHint}>{dirty ? 'Guardá el orden pendiente antes de agregar un tema.' : 'El nombre y la portada se pueden editar después.'}</p>
+          </form>
+        </aside>
+        <section className={styles.library} aria-labelledby="library-title">
+          <div className={styles.libraryHeading}><div><p className={styles.eyebrow}>TU COLECCIÓN</p><h2 id="library-title">Biblioteca <span>{tracks.length}</span></h2></div><button className={dirty ? styles.primary : styles.secondary} disabled={!dirty || !!busy} onClick={() => run('order', async () => {
+            const res = await fetch('/api/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order: tracks.map(t => t.id) }) });
+            if (!res.ok) throw new Error('No se pudo guardar el orden. Intentá de nuevo.');
+            setDirty(false); setNotice({ text: 'Orden de la biblioteca guardado.' });
+          })}>{busy === 'order' ? <Loader2 size={15} className={styles.spin} /> : <Save size={15} />}Guardar orden</button></div>
+          <div className={styles.search}><Search size={17} /><input aria-label="Buscar temas" placeholder="Buscar por tema, artista o año…" value={query} onChange={e => setQuery(e.target.value)} />{query && <button onClick={() => setQuery('')} aria-label="Limpiar búsqueda"><X size={15} /></button>}</div>
+          <div className={styles.listMeta}><span>{dirty ? '● Cambios de orden sin guardar' : 'LISTA DE TEMAS'}</span><span>{query ? `${visibleTracks.length} resultados` : 'Arrastrá para reordenar'}</span></div>
+          {loading ? <div className={styles.empty}><Loader2 className={styles.spin} />Cargando tu biblioteca…</div> : visibleTracks.length === 0 ? <div className={styles.empty}><Disc3 size={32} /><h3>{query ? 'No encontramos ese tema' : 'Todo empieza con un tema'}</h3><p>{query ? 'Probá con otro nombre, artista o año.' : 'Agregá tu primer audio para empezar.'}</p></div> : <ul className={styles.trackList}>{visibleTracks.map(track => {
+            const idx = tracks.findIndex(t => t.id === track.id);
+            return <li key={track.id} className={`${styles.track} ${overId === track.id ? styles.dragOver : ''} ${dragId === track.id ? styles.dragging : ''}`} draggable={!busy && editingId === null && !query} onDragStart={() => setDragId(track.id)} onDragOver={e => { e.preventDefault(); setOverId(track.id); }} onDragEnd={() => { setDragId(null); setOverId(null); }} onDrop={e => { e.preventDefault(); if (dragId !== null && !busy && !query) move(tracks.findIndex(t => t.id === dragId), idx); setDragId(null); setOverId(null); }}>
+              {editingId === track.id ? <form className={styles.editForm} onSubmit={e => { e.preventDefault(); run('edit', async () => {
+                const res = await fetch(`/api/tracks/${track.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(edit) });
+                if (!res.ok) throw new Error('No se pudieron guardar los cambios.');
+                setTracks(current => current.map(t => t.id === track.id ? { ...t, ...edit } : t)); setEditingId(null); setNotice({ text: 'Tema actualizado.' });
+              }); }}><div className={styles.editHeader}><Pencil size={14} />Editando tema</div><label className={styles.field}>Nombre<input required value={edit.songName || ''} onChange={e => setEdit({ ...edit, songName: e.target.value })} /></label><div className={styles.editColumns}><label className={styles.field}>Artista<input value={edit.artist || ''} onChange={e => setEdit({ ...edit, artist: e.target.value })} /></label><label className={styles.field}>Año<input required value={edit.year || ''} onChange={e => setEdit({ ...edit, year: e.target.value })} /></label></div><label className={styles.field}>Imagen de portada<input type="url" value={edit.image || ''} onChange={e => setEdit({ ...edit, image: e.target.value })} /></label><div className={styles.editActions}><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => setEditingId(null)}>Cancelar</button><button className={styles.primary} disabled={!!busy}><Check size={15} />{busy === 'edit' ? 'Guardando…' : 'Guardar cambios'}</button></div></form> : <>
+                <span className={styles.grip}><GripVertical size={15} /></span><span className={styles.index}>{String(idx + 1).padStart(2, '0')}</span><span className={styles.artwork}><Music2 size={19} /></span><div className={styles.trackInfo}><h3>{track.songName}</h3><p>{track.artist} <span> / </span> {track.year}</p></div><div className={styles.trackActions}><div className={styles.moveButtons}><button disabled={idx === 0 || !!busy || !!query} aria-label={`Subir ${track.songName}`} onClick={() => move(idx, idx - 1)}><ArrowUp size={14} /></button><button disabled={idx === tracks.length - 1 || !!busy || !!query} aria-label={`Bajar ${track.songName}`} onClick={() => move(idx, idx + 1)}><ArrowDown size={14} /></button></div><button disabled={!!busy} aria-label={`Editar ${track.songName}`} onClick={() => { setEditingId(track.id); setEdit({ songName: track.songName, year: track.year, image: track.image || '', artist: track.artist }); }}><Pencil size={16} /></button><button className={styles.delete} disabled={!!busy || dirty} aria-label={`Eliminar ${track.songName}`} onClick={() => {
+                  if (!confirm(`¿Eliminar "${track.songName}" y su archivo de audio? Esta acción no se puede deshacer.`)) return;
+                  run(`delete-${track.id}`, async () => { const res = await fetch(`/api/tracks/${track.id}`, { method: 'DELETE' }); if (!res.ok) throw new Error('No se pudo eliminar el tema.'); await loadTracks(); setNotice({ text: 'Tema eliminado.' }); });
+                }}>{busy === `delete-${track.id}` ? <Loader2 size={16} className={styles.spin} /> : <Trash2 size={16} />}</button></div>
+              </>}
+            </li>;
+          })}</ul>}
+          <footer className={styles.libraryFooter}><span>NICOQ / MUSIC LIBRARY</span><span>Tu sonido. Tu orden.</span></footer>
+        </section>
       </div>
-
-      {/* ── Status message ── */}
-      {message && (
-        <p style={{
-          marginTop: '1rem',
-          padding: '0.75rem',
-          background: status === 'error' ? '#2a1010' : '#102a10',
-          fontSize: '0.85rem',
-        }}>
-          {message}
-        </p>
-      )}
     </div>
-  );
+  </main>;
 }
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '0.75rem',
-  opacity: 0.5,
-  marginBottom: '0.25rem',
-  textTransform: 'uppercase',
-  letterSpacing: '0.05em',
-};
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '0.6rem',
-  background: '#1a1a1a',
-  border: '1px solid #333',
-  color: '#f0ece3',
-  fontFamily: 'monospace',
-  fontSize: '0.95rem',
-  boxSizing: 'border-box',
-};
-
-const btnStyle = (disabled: boolean): React.CSSProperties => ({
-  padding: '0.75rem',
-  background: disabled ? '#333' : '#f0ece3',
-  color: '#0a0a0a',
-  border: 'none',
-  cursor: disabled ? 'wait' : 'pointer',
-  fontFamily: 'monospace',
-  fontSize: '0.95rem',
-  fontWeight: 'bold',
-});
-
-const arrowBtn: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  color: '#f0ece3',
-  cursor: 'pointer',
-  padding: 0,
-  fontSize: '0.6rem',
-  lineHeight: 1,
-  opacity: 0.4,
-};
-
-const actionBtn: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  color: '#f0ece3',
-  cursor: 'pointer',
-  padding: '0.2rem',
-  fontSize: '0.85rem',
-  opacity: 0.5,
-};

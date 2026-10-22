@@ -1,7 +1,7 @@
 'use client';
 
-import MusicPortfolio from '@/components/ui/music-portfolio';
-import tracksData from '@/tracks.json';
+import MusicPortfolio from '@/components/music/music-portfolio';
+import tracksData from '@/data/tracks.json';
 
 export default function Home() {
   const projectsData = tracksData;

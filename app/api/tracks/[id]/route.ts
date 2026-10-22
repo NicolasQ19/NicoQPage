@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readFile, writeFile, unlink } from 'fs/promises';
 import path from 'path';
 
-const tracksPath = path.join(process.cwd(), 'tracks.json');
+const tracksPath = path.join(process.cwd(), 'data', 'tracks.json');
 
 async function getTracks() {
   return JSON.parse(await readFile(tracksPath, 'utf-8'));
